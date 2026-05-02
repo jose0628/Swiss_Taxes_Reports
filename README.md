@@ -53,10 +53,19 @@ pip install -r requirements.txt
 Use Ledger Live and copy the **public receiving address** for each account:
 
 1. Open Ledger Live.
-2. Open each crypto account (Bitcoin, Litecoin, Ethereum, Polkadot, Cardano).
+2. Go to **Accounts** and select the account for the cryptocurrency you want to report.
 3. Click **Receive**.
-4. Verify the address on device.
-5. Copy the address and paste it into `wallet_config.yaml`.
+4. Choose the correct account if Ledger Live asks again.
+5. Connect and unlock your Ledger device.
+6. Open the matching app on the Ledger device:
+   - Bitcoin app for Bitcoin
+   - Litecoin app for Litecoin
+   - Ethereum app for Ethereum
+   - Polkadot app for Polkadot
+   - Cardano app for Cardano
+7. Let Ledger Live show the public receiving address.
+8. Verify the address on the Ledger device screen.
+9. Copy the address and paste it into the matching section of `wallet_config.yaml`.
 
 Only public addresses are needed. Never store private keys or seed phrases in this project.
 
@@ -88,6 +97,34 @@ wallet_addresses:
   cardano:
     - "addr1example..."
 ```
+
+How to place Ledger addresses in the file:
+
+- Add Bitcoin Ledger addresses under `wallet_addresses.bitcoin`
+- Add Litecoin Ledger addresses under `wallet_addresses.litecoin`
+- Add Ethereum Ledger addresses under `wallet_addresses.ethereum`
+- Add Polkadot Ledger addresses under `wallet_addresses.polkadot`
+- Add Cardano Ledger addresses under `wallet_addresses.cardano`
+
+Example with multiple Ledger accounts:
+
+```yaml
+wallet_addresses:
+  bitcoin:
+    - "bc1qfirstledgeraddress..."
+    - "bc1qsecondledgeraddress..."
+  litecoin:
+    - "ltc1qledgeraddress..."
+  ethereum:
+    - "0xFirstLedgerAddress..."
+    - "0xSecondLedgerAddress..."
+  polkadot:
+    - "1FirstLedgerAddress..."
+  cardano:
+    - "addr1firstledgeraddress..."
+```
+
+If you use more than one Ledger account for the same coin, add each public address as a new item in that coin list.
 
 ## 5) Run The Report
 
