@@ -1,0 +1,6 @@
+wallet_config.yaml
+reports/
+__pycache__/
+.idea/
+*.xlsx
+*.csv
