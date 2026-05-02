@@ -91,17 +91,28 @@ wallet_addresses:
 
 ## 5) Run The Report
 
-Example for tax year 2025:
+Default (all supported cryptos) for tax year 2025:
 
 ```bash
 python3 generate_wallet_reports.py --year 2025
 ```
 
+Run only selected cryptos:
+
+```bash
+python3 generate_wallet_reports.py --year 2025 --cryptos bitcoin,ethereum,cardano
+```
+
 Optional custom config path:
 
 ```bash
-python3 generate_wallet_reports.py --year 2025 --config /absolute/path/to/wallet_config.yaml
+python3 generate_wallet_reports.py --year 2025 --cryptos litecoin --config /absolute/path/to/wallet_config.yaml
 ```
+
+`--cryptos` accepts:
+
+- `all` (default)
+- Comma-separated values from: `bitcoin,litecoin,ethereum,polkadot,cardano`
 
 ## Output Files
 

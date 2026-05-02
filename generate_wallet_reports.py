@@ -37,6 +37,7 @@ COINGECKO_IDS = {
     "polkadot": "polkadot",
     "cardano": "cardano",
 }
+SUPPORTED_CHAINS = ["bitcoin", "litecoin", "ethereum", "polkadot", "cardano"]
 
 
 @dataclass
@@ -375,6 +376,12 @@ def parse_args() -> argparse.Namespace:
         default="wallet_config.yaml",
         help="YAML config file path with wallet addresses and API keys.",
     )
+    parser.add_argument(
+        "--cryptos",
+        type=str,
+        default="all",
+        help="Comma-separated list of cryptos to process (bitcoin,litecoin,ethereum,polkadot,cardano) or 'all'.",
+    )
     return parser.parse_args()
 
 
@@ -406,48 +413,57 @@ def run() -> None:
     wallet_addresses = read_wallet_addresses(config)
     start, end = year_boundaries_utc(args.year)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if args.cryptos.strip().lower() == "all":
+        selected_chains = set(SUPPORTED_CHAINS)
+    else:
+        selected_chains = {c.strip().lower() for c in args.cryptos.split(",") if c.strip()}
+        invalid = sorted(selected_chains - set(SUPPORTED_CHAINS))
+        if invalid:
+            raise ValueError(f"Unsupported crypto values: {', '.join(invalid)}")
 
     api_keys = config.get("api_keys", {}) or {}
     etherscan_key = str(api_keys.get("etherscan", "") or "")
     subscan_key = str(api_keys.get("subscan", "") or "")
     blockfrost_key = str(api_keys.get("blockfrost_project_id", "") or "")
 
-    all_time_records_by_chain: Dict[str, List[TxRecord]] = {
-        "bitcoin": [],
-        "litecoin": [],
-        "ethereum": [],
-        "polkadot": [],
-        "cardano": [],
-    }
+    all_time_records_by_chain: Dict[str, List[TxRecord]] = {chain: [] for chain in SUPPORTED_CHAINS}
 
-    for wallet in wallet_addresses["bitcoin"]:
-        txs = fetch_btc_or_ltc_blockchair("bitcoin", wallet)
-        all_time_records_by_chain["bitcoin"].extend(parse_btc_ltc("bitcoin", wallet, tx) for tx in txs)
+    if "bitcoin" in selected_chains:
+        for wallet in wallet_addresses["bitcoin"]:
+            txs = fetch_btc_or_ltc_blockchair("bitcoin", wallet)
+            all_time_records_by_chain["bitcoin"].extend(parse_btc_ltc("bitcoin", wallet, tx) for tx in txs)
 
-    for wallet in wallet_addresses["litecoin"]:
-        txs = fetch_btc_or_ltc_blockchair("litecoin", wallet)
-        all_time_records_by_chain["litecoin"].extend(parse_btc_ltc("litecoin", wallet, tx) for tx in txs)
+    if "litecoin" in selected_chains:
+        for wallet in wallet_addresses["litecoin"]:
+            txs = fetch_btc_or_ltc_blockchair("litecoin", wallet)
+            all_time_records_by_chain["litecoin"].extend(parse_btc_ltc("litecoin", wallet, tx) for tx in txs)
 
-    if wallet_addresses["ethereum"] and not etherscan_key:
+    if "ethereum" in selected_chains and wallet_addresses["ethereum"] and not etherscan_key:
         raise RuntimeError("ETHERSCAN_API_KEY is required for Ethereum addresses.")
-    for wallet in wallet_addresses["ethereum"]:
-        txs = fetch_ethereum(wallet, etherscan_key)
-        all_time_records_by_chain["ethereum"].extend(parse_eth(wallet, tx) for tx in txs)
+    if "ethereum" in selected_chains:
+        for wallet in wallet_addresses["ethereum"]:
+            txs = fetch_ethereum(wallet, etherscan_key)
+            all_time_records_by_chain["ethereum"].extend(parse_eth(wallet, tx) for tx in txs)
 
-    if wallet_addresses["polkadot"] and not subscan_key:
+    if "polkadot" in selected_chains and wallet_addresses["polkadot"] and not subscan_key:
         raise RuntimeError("SUBSCAN_API_KEY is required for Polkadot addresses.")
-    for wallet in wallet_addresses["polkadot"]:
-        txs = fetch_polkadot(wallet, subscan_key)
-        all_time_records_by_chain["polkadot"].extend(parse_dot(wallet, tx) for tx in txs)
+    if "polkadot" in selected_chains:
+        for wallet in wallet_addresses["polkadot"]:
+            txs = fetch_polkadot(wallet, subscan_key)
+            all_time_records_by_chain["polkadot"].extend(parse_dot(wallet, tx) for tx in txs)
 
-    if wallet_addresses["cardano"] and not blockfrost_key:
+    if "cardano" in selected_chains and wallet_addresses["cardano"] and not blockfrost_key:
         raise RuntimeError("BLOCKFROST_PROJECT_ID is required for Cardano addresses.")
-    for wallet in wallet_addresses["cardano"]:
-        txs = fetch_cardano(wallet, blockfrost_key)
-        all_time_records_by_chain["cardano"].extend(parse_ada(wallet, tx) for tx in txs)
+    if "cardano" in selected_chains:
+        for wallet in wallet_addresses["cardano"]:
+            txs = fetch_cardano(wallet, blockfrost_key)
+            all_time_records_by_chain["cardano"].extend(parse_ada(wallet, tx) for tx in txs)
 
     year_records_by_chain: Dict[str, List[TxRecord]] = {}
-    for chain, records in all_time_records_by_chain.items():
+    for chain in SUPPORTED_CHAINS:
+        if chain not in selected_chains:
+            continue
+        records = all_time_records_by_chain[chain]
         year_records = [r for r in records if start <= r.timestamp <= end]
         year_records_by_chain[chain] = year_records
         enrich_with_usd(year_records, start, end)
@@ -458,6 +474,8 @@ def run() -> None:
     prices = PriceService()
     summary_rows = []
     for chain, wallet_list in wallet_addresses.items():
+        if chain not in selected_chains:
+            continue
         start_px = prices.get_price_usd(chain, start, start, end) if wallet_list else None
         end_px = prices.get_price_usd(chain, end, start, end) if wallet_list else None
         for wallet in wallet_list:
