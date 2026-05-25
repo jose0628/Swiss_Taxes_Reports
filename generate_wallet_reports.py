@@ -7,8 +7,8 @@ Outputs:
 - One summary Excel file with opening and closing token balances for the selected year.
 
 Supported assets:
-- Bitcoin (BTC) via Blockchair
-- Litecoin (LTC) via Blockchair
+- Bitcoin (BTC) via Blockchair, with mempool.space fallback
+- Litecoin (LTC) via Blockchair, with litecoinspace.org fallback
 - Ethereum (ETH) via Etherscan
 - Polkadot (DOT) via Subscan
 - Cardano (ADA) via Blockfrost
@@ -17,9 +17,11 @@ Supported assets:
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -37,7 +39,26 @@ COINGECKO_IDS = {
     "polkadot": "polkadot",
     "cardano": "cardano",
 }
+COINBASE_PRODUCTS = {
+    "bitcoin": "BTC-USD",
+    "litecoin": "LTC-USD",
+    "ethereum": "ETH-USD",
+    "polkadot": "DOT-USD",
+    "cardano": "ADA-USD",
+}
 SUPPORTED_CHAINS = ["bitcoin", "litecoin", "ethereum", "polkadot", "cardano"]
+ESPLORA_APIS = {
+    "bitcoin": "https://mempool.space/api",
+    "litecoin": "https://litecoinspace.org/api",
+}
+
+
+class BlockchairFetchError(RuntimeError):
+    def __init__(self, chain: str, wallet: str, message: str, status_code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.chain = chain
+        self.wallet = wallet
+        self.status_code = status_code
 
 
 @dataclass
@@ -78,21 +99,82 @@ def year_boundaries_utc(year: int) -> tuple[datetime, datetime]:
 
 
 class PriceService:
-    def __init__(self) -> None:
+    def __init__(self, demo_api_key: str = "", pro_api_key: str = "") -> None:
         self.session = requests.Session()
         self.cache: Dict[str, Dict[str, float]] = {}
+        self.base_url = "https://pro-api.coingecko.com/api/v3" if pro_api_key else "https://api.coingecko.com/api/v3"
+        self.headers = {}
+        if pro_api_key:
+            self.headers["x-cg-pro-api-key"] = pro_api_key
+        elif demo_api_key:
+            self.headers["x-cg-demo-api-key"] = demo_api_key
 
     def _load_daily_prices(self, chain: str, start: datetime, end: datetime) -> Dict[str, float]:
+        try:
+            return self._load_coingecko_daily_prices(chain, start, end)
+        except RuntimeError as exc:
+            if chain not in COINBASE_PRODUCTS:
+                raise
+            print(f"{chain}: CoinGecko unavailable; trying Coinbase Exchange USD candle fallback.")
+            try:
+                return self._load_coinbase_daily_prices(chain, start, end)
+            except requests.RequestException as fallback_exc:
+                raise RuntimeError(
+                    f"{exc}\nCoinbase Exchange fallback also failed for {chain}: {fallback_exc}"
+                ) from fallback_exc
+
+    def _load_coingecko_daily_prices(self, chain: str, start: datetime, end: datetime) -> Dict[str, float]:
         chain_id = COINGECKO_IDS[chain]
-        url = f"https://api.coingecko.com/api/v3/coins/{chain_id}/market_chart/range"
+        url = f"{self.base_url}/coins/{chain_id}/market_chart/range"
         params = {"vs_currency": "usd", "from": dt_to_epoch(start), "to": dt_to_epoch(end)}
-        resp = self.session.get(url, params=params, timeout=30)
-        resp.raise_for_status()
+        try:
+            resp = self.session.get(url, params=params, headers=self.headers, timeout=30)
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            detail = (resp.text or "").strip().replace("\n", " ")[:300]
+            hint = ""
+            if resp.status_code == 401:
+                hint = (
+                    " CoinGecko requires valid authentication for this request. "
+                    "For historical ranges older than 365 days, use a paid CoinGecko key via "
+                    "api_keys.coingecko_pro / COINGECKO_PRO_API_KEY."
+                )
+            elif resp.status_code == 429:
+                hint = " CoinGecko rate-limited this request; wait and rerun, or use an API key with more quota."
+            raise RuntimeError(
+                f"CoinGecko price fetch failed for {chain} with HTTP {resp.status_code}.{hint} "
+                f"Response: {detail}"
+            ) from exc
         data = resp.json()
         out: Dict[str, float] = {}
         for ts_ms, price in data.get("prices", []):
             day = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date().isoformat()
             out[day] = float(price)
+        return out
+
+    def _load_coinbase_daily_prices(self, chain: str, start: datetime, end: datetime) -> Dict[str, float]:
+        product_id = COINBASE_PRODUCTS[chain]
+        out: Dict[str, float] = {}
+        chunk_start = start
+        while chunk_start <= end:
+            chunk_end = min(end, chunk_start + timedelta(days=299))
+            url = f"https://api.exchange.coinbase.com/products/{product_id}/candles"
+            params = {
+                "granularity": 86400,
+                "start": chunk_start.isoformat().replace("+00:00", "Z"),
+                "end": chunk_end.isoformat().replace("+00:00", "Z"),
+            }
+            resp = self.session.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            for candle in resp.json():
+                if len(candle) < 5:
+                    continue
+                day = datetime.fromtimestamp(int(candle[0]), tz=timezone.utc).date().isoformat()
+                out[day] = float(candle[4])
+            chunk_start = chunk_end + timedelta(seconds=1)
+            time.sleep(0.2)
+        if not out:
+            raise RuntimeError(f"Coinbase Exchange returned no USD candles for {chain}.")
         return out
 
     def get_price_usd(self, chain: str, ts: datetime, start: datetime, end: datetime) -> Optional[float]:
@@ -102,14 +184,111 @@ class PriceService:
         return self.cache[chain].get(ts.date().isoformat())
 
 
-def fetch_btc_or_ltc_blockchair(chain: str, wallet: str) -> List[dict]:
+def fetch_btc_or_ltc_blockchair(chain: str, wallet: str, api_key: str = "") -> List[dict]:
     url = f"https://api.blockchair.com/{chain}/dashboards/address/{wallet}"
     params = {"transaction_details": "true", "limit": 10000}
-    resp = requests.get(url, params=params, timeout=45)
-    resp.raise_for_status()
+    if api_key:
+        params["key"] = api_key
+    try:
+        resp = requests.get(url, params=params, timeout=45)
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        detail = (resp.text or "").strip().replace("\n", " ")[:300]
+        hint = ""
+        if resp.status_code == 430:
+            hint = (
+                " Blockchair uses HTTP 430 when anonymous or high-cost API access is blocked. "
+                "Add api_keys.blockchair to wallet_config.yaml, set BLOCKCHAIR_API_KEY, "
+                "or wait for Blockchair access to reset."
+            )
+        raise BlockchairFetchError(
+            chain=chain,
+            wallet=wallet,
+            status_code=resp.status_code,
+            message=(
+                f"Blockchair failed for {chain} address {wallet} "
+                f"with HTTP {resp.status_code}.{hint} Response: {detail}"
+            ),
+        ) from exc
+    except requests.RequestException as exc:
+        raise BlockchairFetchError(
+            chain=chain,
+            wallet=wallet,
+            message=f"Blockchair request failed for {chain} address {wallet}: {exc}",
+        ) from exc
     payload = resp.json()
     data = payload.get("data", {}).get(wallet, {})
     return data.get("transactions", [])
+
+
+def _esplora_balance_change(tx: dict, wallet: str) -> tuple[int, int]:
+    spent = 0
+    received = 0
+    for vin in tx.get("vin", []):
+        prevout = vin.get("prevout") or {}
+        if prevout.get("scriptpubkey_address") == wallet:
+            spent += int(prevout.get("value", 0) or 0)
+    for vout in tx.get("vout", []):
+        if vout.get("scriptpubkey_address") == wallet:
+            received += int(vout.get("value", 0) or 0)
+    return received - spent, spent
+
+
+def _esplora_to_blockchair_tx(tx: dict, wallet: str) -> Optional[dict]:
+    status = tx.get("status") or {}
+    block_time = status.get("block_time")
+    if not block_time:
+        return None
+    balance_change, spent = _esplora_balance_change(tx, wallet)
+    tx_time = datetime.fromtimestamp(int(block_time), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return {
+        "hash": tx.get("txid", ""),
+        "time": tx_time,
+        "balance_change": balance_change,
+        "fee": int(tx.get("fee", 0) or 0) if spent else 0,
+    }
+
+
+def fetch_btc_or_ltc_esplora(chain: str, wallet: str) -> List[dict]:
+    base_url = ESPLORA_APIS[chain]
+    session = requests.Session()
+    out: List[dict] = []
+    last_seen_txid: Optional[str] = None
+    while True:
+        url = f"{base_url}/address/{wallet}/txs/chain"
+        if last_seen_txid:
+            url = f"{url}/{last_seen_txid}"
+        resp = session.get(url, timeout=45)
+        resp.raise_for_status()
+        rows = resp.json()
+        if not rows:
+            break
+        for tx in rows:
+            normalized = _esplora_to_blockchair_tx(tx, wallet)
+            if normalized is not None:
+                out.append(normalized)
+        last_seen_txid = rows[-1].get("txid")
+        if len(rows) < 25 or not last_seen_txid:
+            break
+        time.sleep(0.2)
+    return out
+
+
+def fetch_btc_or_ltc_transactions(chain: str, wallet: str, blockchair_api_key: str = "") -> List[dict]:
+    try:
+        return fetch_btc_or_ltc_blockchair(chain, wallet, blockchair_api_key)
+    except BlockchairFetchError as exc:
+        if exc.status_code not in {429, 430, 435, 503, None}:
+            raise
+        fallback_name = "mempool.space" if chain == "bitcoin" else "litecoinspace.org"
+        print(f"{chain}: Blockchair unavailable for {wallet}; trying {fallback_name} fallback.")
+        try:
+            return fetch_btc_or_ltc_esplora(chain, wallet)
+        except requests.RequestException as fallback_exc:
+            raise RuntimeError(
+                f"{exc}\nFallback via {fallback_name} also failed for {chain} address {wallet}: "
+                f"{fallback_exc}"
+            ) from fallback_exc
 
 
 def parse_btc_ltc(chain: str, wallet: str, tx: dict) -> TxRecord:
@@ -137,8 +316,9 @@ def parse_btc_ltc(chain: str, wallet: str, tx: dict) -> TxRecord:
 
 
 def fetch_ethereum(wallet: str, api_key: str) -> List[dict]:
-    url = "https://api.etherscan.io/api"
+    url = "https://api.etherscan.io/v2/api"
     params = {
+        "chainid": 1,
         "module": "account",
         "action": "txlist",
         "address": wallet,
@@ -149,7 +329,18 @@ def fetch_ethereum(wallet: str, api_key: str) -> List[dict]:
     }
     resp = requests.get(url, params=params, timeout=45)
     resp.raise_for_status()
-    return resp.json().get("result", [])
+    payload = resp.json()
+    result = payload.get("result", [])
+    if isinstance(result, str):
+        if "No transactions found" in result:
+            return []
+        raise RuntimeError(
+            f"Etherscan API error for Ethereum address {wallet}: "
+            f"{payload.get('message', 'NOTOK')} - {result}"
+        )
+    if not isinstance(result, list):
+        raise RuntimeError(f"Etherscan returned an unexpected response for Ethereum address {wallet}: {payload}")
+    return result
 
 
 def parse_eth(wallet: str, tx: dict) -> TxRecord:
@@ -200,7 +391,14 @@ def fetch_polkadot(wallet: str, api_key: str) -> List[dict]:
 
 def parse_dot(wallet: str, tr: dict) -> TxRecord:
     ts = datetime.fromtimestamp(int(tr["block_timestamp"]), tz=timezone.utc)
-    amount_dot = int(tr.get("amount", "0")) / 1e10
+    raw_amount = str(tr.get("amount", "0") or "0")
+    try:
+        amount_dot = int(raw_amount) / 1e10
+    except ValueError:
+        try:
+            amount_dot = float(Decimal(raw_amount))
+        except InvalidOperation as exc:
+            raise ValueError(f"Unexpected Polkadot amount value: {raw_amount}") from exc
     from_addr = tr.get("from", "")
     to_addr = tr.get("to", "")
     is_out = from_addr == wallet
@@ -295,10 +493,16 @@ def parse_ada(wallet: str, tx: dict) -> TxRecord:
     )
 
 
-def enrich_with_usd(records: List[TxRecord], start: datetime, end: datetime) -> None:
+def enrich_with_usd(
+    records: List[TxRecord],
+    start: datetime,
+    end: datetime,
+    coingecko_demo_key: str = "",
+    coingecko_pro_key: str = "",
+) -> None:
     if not records:
         return
-    prices = PriceService()
+    prices = PriceService(coingecko_demo_key, coingecko_pro_key)
     for rec in records:
         px = prices.get_price_usd(rec.chain, rec.timestamp, start, end)
         rec.price_usd = px
@@ -425,17 +629,27 @@ def run() -> None:
     etherscan_key = str(api_keys.get("etherscan", "") or "")
     subscan_key = str(api_keys.get("subscan", "") or "")
     blockfrost_key = str(api_keys.get("blockfrost_project_id", "") or "")
+    blockchair_key = str(api_keys.get("blockchair", "") or os.environ.get("BLOCKCHAIR_API_KEY", "") or "")
+    coingecko_demo_key = str(
+        api_keys.get("coingecko_demo", "")
+        or api_keys.get("coingecko", "")
+        or os.environ.get("COINGECKO_DEMO_API_KEY", "")
+        or ""
+    )
+    coingecko_pro_key = str(
+        api_keys.get("coingecko_pro", "") or os.environ.get("COINGECKO_PRO_API_KEY", "") or ""
+    )
 
     all_time_records_by_chain: Dict[str, List[TxRecord]] = {chain: [] for chain in SUPPORTED_CHAINS}
 
     if "bitcoin" in selected_chains:
         for wallet in wallet_addresses["bitcoin"]:
-            txs = fetch_btc_or_ltc_blockchair("bitcoin", wallet)
+            txs = fetch_btc_or_ltc_transactions("bitcoin", wallet, blockchair_key)
             all_time_records_by_chain["bitcoin"].extend(parse_btc_ltc("bitcoin", wallet, tx) for tx in txs)
 
     if "litecoin" in selected_chains:
         for wallet in wallet_addresses["litecoin"]:
-            txs = fetch_btc_or_ltc_blockchair("litecoin", wallet)
+            txs = fetch_btc_or_ltc_transactions("litecoin", wallet, blockchair_key)
             all_time_records_by_chain["litecoin"].extend(parse_btc_ltc("litecoin", wallet, tx) for tx in txs)
 
     if "ethereum" in selected_chains and wallet_addresses["ethereum"] and not etherscan_key:
@@ -466,12 +680,12 @@ def run() -> None:
         records = all_time_records_by_chain[chain]
         year_records = [r for r in records if start <= r.timestamp <= end]
         year_records_by_chain[chain] = year_records
-        enrich_with_usd(year_records, start, end)
+        enrich_with_usd(year_records, start, end, coingecko_demo_key, coingecko_pro_key)
         out_file = OUTPUT_DIR / f"{chain}_{args.year}_transactions_usd.xlsx"
         to_dataframe(year_records).to_excel(out_file, index=False)
         print(f"{chain}: {len(year_records)} year rows -> {out_file}")
 
-    prices = PriceService()
+    prices = PriceService(coingecko_demo_key, coingecko_pro_key)
     summary_rows = []
     for chain, wallet_list in wallet_addresses.items():
         if chain not in selected_chains:

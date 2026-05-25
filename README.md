@@ -16,6 +16,8 @@ Python tooling to generate crypto transaction reports for tax declarations.
   - Etherscan (Ethereum)
   - Subscan (Polkadot)
   - Blockfrost (Cardano)
+  - Blockchair (optional, recommended for Bitcoin/Litecoin if the free API returns HTTP 430)
+  - CoinGecko (optional, preferred USD historical price source)
 
 ## 1) Create Conda Environment
 
@@ -47,6 +49,21 @@ pip install -r requirements.txt
 2. Create a Cardano mainnet project.
 3. Copy the project ID.
 4. Put it in `wallet_config.yaml` under `api_keys.blockfrost_project_id`.
+
+### Blockchair (Bitcoin/Litecoin, Optional)
+
+Bitcoin and Litecoin use Blockchair first. If Blockchair returns HTTP 430, the script falls back to public Esplora-compatible explorers:
+
+- Bitcoin: [mempool.space](https://mempool.space/)
+- Litecoin: [litecoinspace.org](https://litecoinspace.org/)
+
+For more reliable Blockchair access, add a Blockchair API key under `api_keys.blockchair` or set the `BLOCKCHAIR_API_KEY` environment variable.
+
+### CoinGecko / Coinbase (USD Prices)
+
+CoinGecko is used first for USD historical prices. If CoinGecko is unavailable or the requested range is outside the public plan's historical limit, the script falls back to Coinbase Exchange daily USD candles.
+
+Create a CoinGecko Demo API key and put it under `api_keys.coingecko_demo`, or set `COINGECKO_DEMO_API_KEY`. For historical ranges older than 365 days, use a paid CoinGecko key under `api_keys.coingecko_pro` or set `COINGECKO_PRO_API_KEY`.
 
 ## 3) Get Wallet Addresses From Ledger
 
@@ -84,6 +101,9 @@ api_keys:
   etherscan: "YOUR_ETHERSCAN_KEY"
   subscan: "YOUR_SUBSCAN_KEY"
   blockfrost_project_id: "YOUR_BLOCKFROST_PROJECT_ID"
+  blockchair: ""
+  coingecko_demo: "YOUR_COINGECKO_DEMO_KEY"
+  coingecko_pro: ""
 
 wallet_addresses:
   bitcoin:

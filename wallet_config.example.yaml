@@ -2,6 +2,9 @@ api_keys:
   etherscan: "PUT_ETHERSCAN_API_KEY_HERE"
   subscan: "PUT_SUBSCAN_API_KEY_HERE"
   blockfrost_project_id: "PUT_BLOCKFROST_PROJECT_ID_HERE"
+  blockchair: ""
+  coingecko_demo: ""
+  coingecko_pro: ""
 
 wallet_addresses:
   bitcoin:
