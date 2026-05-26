@@ -252,46 +252,56 @@ def generate_reports(
                 record["amount_usd"] = record["amount_coin"] * px if px else None
                 record["fee_usd"] = record["fee_coin"] * px if px else None
         
+        # Determine output year label
+        if year:
+            output_year = year
+            year_output_str = str(year)
+        else:
+            output_year = "all_years"
+            year_output_str = "all_years"
+        
         # Output transaction file
         df_tx = pd.DataFrame(year_transactions)
         if not df_tx.empty:
             df_tx = df_tx.sort_values("timestamp_utc").reset_index(drop=True)
         price_suffix = "_usd" if include_prices else ""
-        tx_file = OUTPUT_DIR / f"litecoin_all_years_transactions{price_suffix}.xlsx"
+        tx_file = OUTPUT_DIR / f"litecoin_{year_output_str}_transactions{price_suffix}.xlsx"
         df_tx.to_excel(tx_file, index=False)
-        print(f"Litecoin all-years transactions: {len(df_tx)} rows -> {tx_file}")
+        print(f"Litecoin {year_output_str} transactions: {len(df_tx)} rows -> {tx_file}")
         
-        # Generate summary for all years
-        if not year:
-            # Calculate overall summary
+        # Generate summary
+        if year:
+            # When year is specified, build summary for that year
+            start = f"{year}-01-01T00:00:00+00:00"
+            end = f"{year}-12-31T23:59:59+00:00"
+        else:
+            # Calculate overall summary for all years
             start = min((r["timestamp_utc"] for r in all_transactions), default="")
             end = max((r["timestamp_utc"] for r in all_transactions), default="")
+        
+        start_px = get_price_usd("litecoin", start, coingecko_demo_key, coingecko_pro_key) if include_prices else None
+        end_px = get_price_usd("litecoin", end, coingecko_demo_key, coingecko_pro_key) if include_prices else None
+        
+        summary_rows = []
+        for wallet in litecoin_wallets:
+            txs = wallet_data[wallet]
+            tx_records = [parse_litecoin_tx(wallet, tx) for tx in txs]
             
-            start_px = get_price_usd("litecoin", start, coingecko_demo_key, coingecko_pro_key) if include_prices else None
-            end_px = get_price_usd("litecoin", end, coingecko_demo_key, coingecko_pro_key) if include_prices else None
-            
-            summary_rows = []
-            for wallet in litecoin_wallets:
-                txs = wallet_data[wallet]
-                tx_records = [parse_litecoin_tx(wallet, tx) for tx in txs]
-                
-                summary_rows.append(
-                    build_balance_summary(
-                        wallet=wallet,
-                        all_records=tx_records,
-                        start=start,
-                        end=end,
-                        start_price=start_px,
-                        end_price=end_px,
-                    )
+            summary_rows.append(
+                build_balance_summary(
+                    wallet=wallet,
+                    all_records=tx_records,
+                    start=start,
+                    end=end,
+                    start_price=start_px,
+                    end_price=end_px,
                 )
-            
-            summary_df = pd.DataFrame(summary_rows)
-            summary_file = OUTPUT_DIR / f"litecoin_all_years_summary.xlsx"
-            summary_df.to_excel(summary_file, index=False)
-            print(f"Litecoin all-years summary: {len(summary_df)} rows -> {summary_file}")
-        else:
-            print(f"Litecoin: {len(year_transactions)} transactions for year {year}")
+            )
+        
+        summary_df = pd.DataFrame(summary_rows)
+        summary_file = OUTPUT_DIR / f"litecoin_{year_output_str}_summary.xlsx"
+        summary_df.to_excel(summary_file, index=False)
+        print(f"Litecoin {year_output_str} summary: {len(summary_df)} rows -> {summary_file}")
         
         # Print totals
         if include_prices:

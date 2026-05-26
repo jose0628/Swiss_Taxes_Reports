@@ -148,60 +148,102 @@ If you use more than one Ledger account for the same coin, add each public addre
 
 ## 5) Run The Report
 
+### All Cryptos with `generate_wallet_reports.py`
+
 Default (all supported cryptos) for tax year 2025:
 
 ```bash
 python3 generate_wallet_reports.py --year 2025
-```
+````
 
 Run only selected cryptos:
 
 ```bash
 python3 generate_wallet_reports.py --year 2025 --cryptos bitcoin,ethereum,cardano
-```
+````
 
 Optional custom config path:
 
 ```bash
 python3 generate_wallet_reports.py --year 2025 --cryptos litecoin --config /absolute/path/to/wallet_config.yaml
-```
+````
 
 `--cryptos` accepts:
 
 - `all` (default)
 - Comma-separated values from: `bitcoin,litecoin,ethereum,polkadot,cardano`
 
-Cardano only, including staking rewards:
+### Single-Crypto Scripts
 
+For individual cryptocurrencies, use the dedicated scripts:
+
+**Bitcoin:**
+```bash
+python3 generate_bitcoin_reports.py --year 2025
+````
+
+**Litecoin:**
+```bash
+python3 generate_litecoin_reports.py --year 2025
+````
+
+**Ethereum:**
+```bash
+python3 generate_ethereum_reports.py --year 2025
+````
+
+**Cardano** (includes staking rewards):
 ```bash
 python3 generate_cardano_reports.py --year 2025
-```
+````
 
-Polkadot only, including staking rewards:
-
+**Polkadot** (includes staking rewards):
 ```bash
 python3 generate_polkadot_reports.py --year 2025
-```
+````
 
-These fetch transactions plus staking reward rows and write:
+### Multi-Year Reports with `--all-years`
 
-- `reports/cardano_2025_transactions.xlsx`
-- `reports/polkadot_2025_transactions.xlsx`
+For reports spanning all available years (not limited to a single tax year), use the `--all-years` flag:
 
-For Cardano, the script uses the configured address to find the linked stake address, then checks all payment addresses associated with that stake account.
-For Polkadot, the script checks both the relay-chain network (`polkadot`) and Asset Hub (`assethub-polkadot`). Staking reward rows are fetched from the relay-chain reward endpoint.
+**Bitcoin (all years):**
+```bash
+python3 generate_bitcoin_reports.py --all-years
+````
 
-Add historical USD prices only when needed, for example:
+**Litecoin (all years):**
+```bash
+python3 generate_litecoin_reports.py --all-years
+````
+
+**Ethereum (all years):**
+```bash
+python3 generate_ethereum_reports.py --all-years
+````
+
+**Cardano (all years):**
+```bash
+python3 generate_cardano_reports.py --all-years
+````
+
+**Polkadot (all years):**
+```bash
+python3 generate_polkadot_reports.py --all-years
+````
+
+### USD Prices
+
+Add historical USD prices only when needed:
 
 ```bash
 python3 generate_cardano_reports.py --year 2025 --include-prices
-```
+````
 
 With a custom config path:
 
 ```bash
 python3 generate_polkadot_reports.py --year 2025 --config /absolute/path/to/wallet_config.yaml
-```
+````
 
 ## Output Files
 

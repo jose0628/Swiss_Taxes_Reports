@@ -30,8 +30,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--year",
         type=int,
-        required=True,
-        help="Tax year to process, for example: 2025",
+        help="Tax year to process, for example: 2025 (optional if --all-years is used)",
+    )
+    parser.add_argument(
+        "--all-years",
+        action="store_true",
+        help="Fetch transactions for all years (not limited to a single year). Overrides --year if provided.",
     )
     parser.add_argument(
         "--config",
@@ -259,9 +263,10 @@ def get_price_usd(chain: str, timestamp: str, demo_key: str = "", pro_key: str =
 
 
 def generate_reports(
-    year: int,
+    year: int | None,
     config_path: str,
     include_prices: bool = True,
+    all_years: bool = False,
 ) -> None:
     """Generate Polkadot transaction and reward reports."""
     config = load_config(config_path)
@@ -288,8 +293,16 @@ def generate_reports(
     
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
-    start = f"{year}-01-01T00:00:00+00:00"
-    end = f"{year}-12-31T23:59:59+00:00"
+    if all_years:
+        # No specific year filtering - get all transactions
+        start = ""
+        end = ""
+        year = None
+    elif year is None:
+        raise ValueError("--year or --all-years must be provided")
+    else:
+        start = f"{year}-01-01T00:00:00+00:00"
+        end = f"{year}-12-31T23:59:59+00:00"
     
     # Fetch all data
     all_transactions: List[dict] = []
@@ -308,10 +321,23 @@ def generate_reports(
             record = parse_polkadot_reward(wallet, reward)
             all_rewards.append(record)
     
-    # Filter to year
-    year_str = str(year)
-    year_transactions = [r for r in all_transactions if year_str in r["timestamp_utc"]]
-    year_rewards = [r for r in all_rewards if year_str in r["timestamp_utc"]]
+    # Determine output year label and filter transactions
+    if all_years:
+        year_transactions = all_transactions
+        year_rewards = all_rewards
+        if year:
+            # When year is specified, filter to that year
+            year_str = str(year)
+            year_transactions = [r for r in all_transactions if year_str in r.get("timestamp_utc", "")]
+            year_rewards = [r for r in all_rewards if year_str in r.get("timestamp_utc", "")]
+            year_output = year
+        else:
+            year_output = "all_years"
+    else:
+        year_str = str(year)
+        year_transactions = [r for r in all_transactions if year_str in r.get("timestamp_utc", "")]
+        year_rewards = [r for r in all_rewards if year_str in r.get("timestamp_utc", "")]
+        year_output = year
     
     # Enrich with USD prices if requested
     if include_prices:
@@ -326,7 +352,7 @@ def generate_reports(
     if not df_tx.empty:
         df_tx = df_tx.sort_values("timestamp_utc").reset_index(drop=True)
     price_suffix = "_usd" if include_prices else ""
-    tx_file = OUTPUT_DIR / f"polkadot_{year}_transactions{price_suffix}.xlsx"
+    tx_file = OUTPUT_DIR / f"polkadot_{year_output}_transactions{price_suffix}.xlsx"
     df_tx.to_excel(tx_file, index=False)
     print(f"Polkadot transactions: {len(df_tx)} rows -> {tx_file}")
     
@@ -334,7 +360,7 @@ def generate_reports(
     df_rewards = pd.DataFrame(year_rewards)
     if not df_rewards.empty:
         df_rewards = df_rewards.sort_values("timestamp_utc").reset_index(drop=True)
-    rewards_tx_file = OUTPUT_DIR / f"polkadot_{year}_rewards_transactions{price_suffix}.xlsx"
+    rewards_tx_file = OUTPUT_DIR / f"polkadot_{year_output}_rewards_transactions{price_suffix}.xlsx"
     df_rewards.to_excel(rewards_tx_file, index=False)
     print(f"Polkadot rewards transactions: {len(df_rewards)} rows -> {rewards_tx_file}")
     
@@ -361,11 +387,16 @@ def generate_reports(
         )
     
     summary_df = pd.DataFrame(summary_rows)
-    summary_file = OUTPUT_DIR / f"polkadot_{year}_summary.xlsx"
+    summary_file = OUTPUT_DIR / f"polkadot_{year_output}_summary.xlsx"
     summary_df.to_excel(summary_file, index=False)
     print(f"Polkadot summary: {len(summary_df)} rows -> {summary_file}")
     
     # Print totals
+    if all_years:
+        print(f"Polkadot: {len(year_transactions)} total transactions")
+    else:
+        print(f"Polkadot: {len(year_transactions)} transactions for year {year}")
+    
     if include_prices:
         total_tx = sum(r["amount_usd"] or 0 for r in year_transactions)
         total_rewards = sum(r["amount_usd"] or 0 for r in year_rewards)
@@ -384,6 +415,7 @@ def run() -> None:
         year=args.year,
         config_path=args.config,
         include_prices=args.include_prices,
+        all_years=args.all_years,
     )
 
 

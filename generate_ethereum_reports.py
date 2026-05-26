@@ -13,7 +13,8 @@ import argparse
 import os
 from pathlib import Path
 from typing import List
-
+from datetime import datetime
+import datetime
 import pandas as pd
 import requests
 import yaml
@@ -90,7 +91,7 @@ def fetch_ethereum(wallet: str, api_key: str) -> List[dict]:
 
 def parse_ethereum_tx(wallet: str, tx: dict) -> dict:
     """Parse an Ethereum transaction into a record."""
-    ts = datetime.fromtimestamp(int(tx["timeStamp"]), tz=timezone.utc)
+    ts = datetime.fromtimestamp(int(tx["timeStamp"]), tz=datetime.timezone.utc)
     value_eth = int(tx["value"]) / 1e18
     from_addr = tx.get("from", "").lower()
     to_addr = tx.get("to", "").lower()
@@ -149,8 +150,6 @@ def build_balance_summary(
 
 def get_price_usd(chain: str, timestamp: str, demo_key: str = "", pro_key: str = "") -> float | None:
     """Get USD price for a given timestamp."""
-    import requests
-    from datetime import datetime
     
     base_url = "https://pro-api.coingecko.com/api/v3" if pro_key else "https://api.coingecko.com/api/v3"
     headers = {}
@@ -241,46 +240,56 @@ def generate_reports(
                 record["amount_usd"] = record["amount_coin"] * px if px else None
                 record["fee_usd"] = record["fee_coin"] * px if px else None
         
+        # Determine output year label
+        if year:
+            output_year = year
+            year_output_str = str(year)
+        else:
+            output_year = "all_years"
+            year_output_str = "all_years"
+        
         # Output transaction file
         df_tx = pd.DataFrame(year_transactions)
         if not df_tx.empty:
             df_tx = df_tx.sort_values("timestamp_utc").reset_index(drop=True)
         price_suffix = "_usd" if include_prices else ""
-        tx_file = OUTPUT_DIR / f"ethereum_all_years_transactions{price_suffix}.xlsx"
+        tx_file = OUTPUT_DIR / f"ethereum_{year_output_str}_transactions{price_suffix}.xlsx"
         df_tx.to_excel(tx_file, index=False)
-        print(f"Ethereum all-years transactions: {len(df_tx)} rows -> {tx_file}")
+        print(f"Ethereum {year_output_str} transactions: {len(df_tx)} rows -> {tx_file}")
         
-        # Generate summary for all years
-        if not year:
-            # Calculate overall summary
+        # Generate summary for all years or specific year
+        if year:
+            # When year is specified, build summary for that year
+            start = f"{year}-01-01T00:00:00+00:00"
+            end = f"{year}-12-31T23:59:59+00:00"
+        else:
+            # Calculate overall summary for all years
             start = min((r["timestamp_utc"] for r in all_transactions), default="")
             end = max((r["timestamp_utc"] for r in all_transactions), default="")
+        
+        start_px = get_price_usd("ethereum", start, coingecko_demo_key, coingecko_pro_key) if include_prices else None
+        end_px = get_price_usd("ethereum", end, coingecko_demo_key, coingecko_pro_key) if include_prices else None
+        
+        summary_rows = []
+        for wallet in ethereum_wallets:
+            txs = wallet_data[wallet]
+            tx_records = [parse_ethereum_tx(wallet, tx) for tx in txs]
             
-            start_px = get_price_usd("ethereum", start, coingecko_demo_key, coingecko_pro_key) if include_prices else None
-            end_px = get_price_usd("ethereum", end, coingecko_demo_key, coingecko_pro_key) if include_prices else None
-            
-            summary_rows = []
-            for wallet in ethereum_wallets:
-                txs = wallet_data[wallet]
-                tx_records = [parse_ethereum_tx(wallet, tx) for tx in txs]
-                
-                summary_rows.append(
-                    build_balance_summary(
-                        wallet=wallet,
-                        all_records=tx_records,
-                        start=start,
-                        end=end,
-                        start_price=start_px,
-                        end_price=end_px,
-                    )
+            summary_rows.append(
+                build_balance_summary(
+                    wallet=wallet,
+                    all_records=tx_records,
+                    start=start,
+                    end=end,
+                    start_price=start_px,
+                    end_price=end_px,
                 )
-            
-            summary_df = pd.DataFrame(summary_rows)
-            summary_file = OUTPUT_DIR / f"ethereum_all_years_summary.xlsx"
-            summary_df.to_excel(summary_file, index=False)
-            print(f"Ethereum all-years summary: {len(summary_df)} rows -> {summary_file}")
-        else:
-            print(f"Ethereum: {len(year_transactions)} transactions for year {year}")
+            )
+        
+        summary_df = pd.DataFrame(summary_rows)
+        summary_file = OUTPUT_DIR / f"ethereum_{year_output_str}_summary.xlsx"
+        summary_df.to_excel(summary_file, index=False)
+        print(f"Ethereum {year_output_str} summary: {len(summary_df)} rows -> {summary_file}")
         
         # Print totals
         if include_prices:
