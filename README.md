@@ -171,6 +171,38 @@ python3 generate_wallet_reports.py --year 2025 --cryptos litecoin --config /abso
 - `all` (default)
 - Comma-separated values from: `bitcoin,litecoin,ethereum,polkadot,cardano`
 
+Cardano only, including staking rewards:
+
+```bash
+python3 generate_cardano_reports.py --year 2025
+```
+
+Polkadot only, including staking rewards:
+
+```bash
+python3 generate_polkadot_reports.py --year 2025
+```
+
+These fetch transactions plus staking reward rows and write:
+
+- `reports/cardano_2025_transactions.xlsx`
+- `reports/polkadot_2025_transactions.xlsx`
+
+For Cardano, the script uses the configured address to find the linked stake address, then checks all payment addresses associated with that stake account.
+For Polkadot, the script checks both the relay-chain network (`polkadot`) and Asset Hub (`assethub-polkadot`). Staking reward rows are fetched from the relay-chain reward endpoint.
+
+Add historical USD prices only when needed, for example:
+
+```bash
+python3 generate_cardano_reports.py --year 2025 --include-prices
+```
+
+With a custom config path:
+
+```bash
+python3 generate_polkadot_reports.py --year 2025 --config /absolute/path/to/wallet_config.yaml
+```
+
 ## Output Files
 
 Generated in `reports/`:
@@ -181,6 +213,8 @@ Generated in `reports/`:
 - `polkadot_2025_transactions_usd.xlsx`
 - `cardano_2025_transactions_usd.xlsx`
 - `yearly_balances_summary_2025.xlsx`
+- `polkadot_2025_transactions.xlsx` when using the dedicated Polkadot script without `--include-prices`
+- `cardano_2025_transactions.xlsx` when using the dedicated Cardano script without `--include-prices`
 
 ## Security Notes
 
