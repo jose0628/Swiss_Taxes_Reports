@@ -41,7 +41,7 @@ def run() -> None:
         config_path=args.config,
         selected_chains={"polkadot"},
         include_prices=args.include_prices,
-        include_summary=False,
+        include_summary=True,
         include_staking_rewards=True,
     )
 
